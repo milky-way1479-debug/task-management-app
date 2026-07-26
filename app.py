@@ -2,8 +2,8 @@ import streamlit as st
 import uuid
 import base64
 
-# ページ設定（ファイルを大きく見せるため wide モードに変更）
-st.set_page_config(page_title="タスク管理アプリ v2", page_icon="📝", layout="wide")
+# ページ設定（wide モードで広い作業域を確保）
+st.set_page_config(page_title="タスク管理アプリ v3", page_icon="📝", layout="wide")
 
 # --- セッション状態の初期化 ---
 if "app_title" not in st.session_state:
@@ -16,10 +16,10 @@ if "trash" not in st.session_state:
     st.session_state.trash = []
 
 # --- ユーティリティ関数 ---
-def display_pdf(file_bytes):
-    """PDFをBase64変換してiframeで表示"""
+def display_pdf(file_bytes, height=500):
+    """PDFをBase64変換して指定された高さのiframeで表示"""
     base64_pdf = base64.b64encode(file_bytes).decode('utf-8')
-    pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="500" type="application/pdf"></iframe>'
+    pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="{height}" type="application/pdf"></iframe>'
     st.markdown(pdf_display, unsafe_allow_html=True)
 
 # --- 操作関数 ---
@@ -28,8 +28,9 @@ def add_category():
         "id": str(uuid.uuid4()),
         "title": "新しい大見出し",
         "tasks": [],
-        "file": None, # ファイル情報を保持
-        "file_type": None
+        "file": None,
+        "file_type": None,
+        "file_height": 500  # デフォルトのプレビュー高さ(px)
     })
 
 def delete_category(cat_index):
@@ -50,8 +51,17 @@ def restore_item(trash_index):
         st.session_state.categories.append(trashed["item"])
     else:
         parent = next((c for c in st.session_state.categories if c["id"] == trashed["parent_id"]), None)
-        if parent: parent["tasks"].append(trashed["item"])
-        else: st.session_state.categories.append({"id": str(uuid.uuid4()), "title": "復元先(自動生成)", "tasks": [trashed["item"]], "file": None, "file_type": None})
+        if parent: 
+            parent["tasks"].append(trashed["item"])
+        else: 
+            st.session_state.categories.append({
+                "id": str(uuid.uuid4()), 
+                "title": "復元先(自動生成)", 
+                "tasks": [trashed["item"]], 
+                "file": None, 
+                "file_type": None,
+                "file_height": 500
+            })
 
 def clear_trash():
     st.session_state.trash = []
@@ -64,6 +74,10 @@ st.divider()
 
 # 2. メインコンテンツ
 for cat_idx, category in enumerate(st.session_state.categories):
+    # データ構造の互換性チェック（既存セッション対策）
+    if "file_height" not in category:
+        category["file_height"] = 500
+
     with st.container(border=True):
         head_col1, head_col2, head_col3 = st.columns([6, 2, 1])
         
@@ -76,8 +90,7 @@ for cat_idx, category in enumerate(st.session_state.categories):
         with head_col3:
             st.button("✖", key=f"del_c_{category['id']}", on_click=delete_category, args=(cat_idx,))
 
-        # --- ファイルアップロード＆表示エリア ---
-        # 編集可能にするため、カラムで分割
+        # 2カラム構成（左：設定・タスク、右：プレビュー）
         edit_col, view_col = st.columns([1, 2])
         
         with edit_col:
@@ -88,6 +101,16 @@ for cat_idx, category in enumerate(st.session_state.categories):
                 category["file_type"] = uploaded_file.type
             
             if category["file"]:
+                # --- 表示サイズ変更スライダー ---
+                category["file_height"] = st.slider(
+                    "🔍 プレビューサイズ（高さpx）",
+                    min_value=200,
+                    max_value=1000,
+                    value=category["file_height"],
+                    step=50,
+                    key=f"size_slider_{category['id']}"
+                )
+
                 if st.button("添付ファイルを消去", key=f"clear_f_{category['id']}"):
                     category["file"] = None
                     category["file_type"] = None
@@ -103,26 +126,27 @@ for cat_idx, category in enumerate(st.session_state.categories):
 
         with view_col:
             if category["file"]:
-                st.write("🧐 **資料プレビュー**")
+                st.write(f"🧐 **資料プレビュー** (高さ: {category['file_height']}px)")
                 if category["file_type"] == "application/pdf":
-                    display_pdf(category["file"])
+                    display_pdf(category["file"], height=category["file_height"])
                 else:
-                    st.image(category["file"], use_column_width=True)
+                    # スライダーの高さに合わせてコンテナ枠を調整
+                    with st.container(height=category["file_height"], border=False):
+                        st.image(category["file"], use_container_width=True)
             else:
                 st.info("資料は添付されていません")
 
-# 3. 追加ボタン
+# 3. 大見出し追加ボタン
 st.button("＋ 大見出しを追加", on_click=add_category, type="primary", use_container_width=True)
 
-# 4. ゴミ箱
+# 4. ゴミ箱（削除履歴）
 with st.expander(f"🗑️ ゴミ箱（{len(st.session_state.trash)} 件）"):
     if not st.session_state.trash:
-        st.write("空です")
+        st.write("ゴミ箱は空です。")
     else:
         st.button("ゴミ箱を空にする", on_click=clear_trash)
         for idx, item in enumerate(reversed(st.session_state.trash)):
             actual_idx = len(st.session_state.trash) - 1 - idx
             c1, c2 = st.columns([7, 2])
-            c1.write(f"{'【大】' if item['type']=='category' else '【中】'} {item['item']['title']}")
+            c1.write(f"{'【大見出し】' if item['type']=='category' else '【中見出し】'} {item['item']['title']}")
             c2.button("復元", key=f"res_{idx}", on_click=restore_item, args=(actual_idx,))
-
